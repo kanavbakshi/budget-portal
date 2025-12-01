@@ -27,7 +27,7 @@ st.markdown("""
     /* BASE THEME */
     html, body, [class*="css"] {
         font-family: 'Google Sans', sans-serif;
-        background-color: #f9f9f9; /* Soft grey background for contrast */
+        background-color: #f9f9f9; 
         color: #1c1c1c;
     }
 
@@ -42,7 +42,6 @@ st.markdown("""
         background-color: white;
     }
     
-    /* The Chat Bubble itself - Now a "Card" */
     .stChatMessage {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -54,10 +53,10 @@ st.markdown("""
         margin-bottom: 15px;
     }
     
-    /* LINK BUTTONS (The Star of the Show) */
+    /* LINK BUTTONS */
     .file-link {
         display: inline-block;
-        background-color: #1c1c1c; /* JLP Black */
+        background-color: #1c1c1c; 
         color: #ffffff !important;
         padding: 10px 20px;
         border-radius: 0px; 
@@ -87,7 +86,7 @@ st.markdown("""
         box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
     
-    /* JLP LOGO RECREATION (CSS) */
+    /* JLP LOGO RECREATION */
     .jlp-logo-box {
         font-family: 'Gill Sans', 'Gill Sans MT', Calibri, sans-serif;
         color: #000;
@@ -95,43 +94,40 @@ st.markdown("""
         line-height: 1;
         text-transform: uppercase;
     }
-    .jlp-main {
-        font-size: 32px;
-        font-weight: 600;
-        letter-spacing: 2px;
-        display: block;
-    }
-    .jlp-sub {
-        font-size: 14px;
-        font-weight: 400;
-        letter-spacing: 3px;
-        margin-top: 5px;
-        display: block;
-    }
-    
-    /* VERTICAL ALIGNMENT HELPER */
-    div[data-testid="column"] {
-        display: flex;
-        align-items: center; 
-        justify-content: center;
-    }
+    .jlp-main { font-size: 32px; font-weight: 600; letter-spacing: 2px; display: block; }
+    .jlp-sub { font-size: 14px; font-weight: 400; letter-spacing: 3px; margin-top: 5px; display: block; }
+    div[data-testid="column"] { display: flex; align-items: center; justify-content: center; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. CREDENTIALS ---
+# --- 3. CREDENTIALS & FAIL-SAFE ---
 FOLDER_ID = "1km4pPoH4Gqa47Aug0tW1DR4ElkRvh72k" 
-GEMINI_API_KEY = "AIzaSyB4ZO0yEI2ApKb4XBKN1idyUEjav8FuFCI"
 CLIENT_PASSWORD = "Google2025!" 
+
+# FAIL-SAFE: Try Secrets first, then Fallback to Sidebar Input
+if "GEMINI_API_KEY" in st.secrets:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+else:
+    # This keeps the app alive if secrets fail
+    GEMINI_API_KEY = st.sidebar.text_input("⚠️ Enter Gemini API Key (Admin Override)", type="password")
+
+if not GEMINI_API_KEY:
+    st.warning("Please configure the API Key in Secrets or enter it in the sidebar to proceed.")
+    st.stop()
 
 # --- 4. BACKEND LOGIC ---
 @st.cache_resource
 def get_drive_service():
     SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-    if os.path.exists("service_account.json"):
-        creds = service_account.Credentials.from_service_account_file("service_account.json", scopes=SCOPES)
-    elif "gcp_service_account" in st.secrets:
-        creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
-    else: return None
+    # Check for secrets first (Cloud), then local file (Dev)
+    if "gcp_service_account" in st.secrets:
+        creds = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"], scopes=SCOPES)
+    elif os.path.exists("service_account.json"):
+        creds = service_account.Credentials.from_service_account_file(
+            "service_account.json", scopes=SCOPES)
+    else:
+        return None
     return build('drive', 'v3', credentials=creds)
 
 def get_working_model():
@@ -188,7 +184,6 @@ def build_knowledge_base(_service, folder_id):
         progress_bar.progress((i + 1) / len(supported), text=f"Reading: {f['name']}...")
         content = read_file(_service, f['id'], f['mimeType'])
         if content:
-            # We explicitly label the LINK here so the AI sees it
             global_context += f"\n\n=== DOCUMENT START: {f['name']} ===\n"
             global_context += f"FILE_LINK: {f.get('webViewLink', '#')}\n" 
             global_context += f"CONTENT:\n{content}\n"
@@ -214,26 +209,14 @@ def generate_with_backoff(model, prompt):
     return "⚠️ Server busy. Please wait 1 min."
 
 def extract_and_render_links(text):
-    """
-    Scans text for Markdown links [Title](URL) and extracts them 
-    to render as Premium Buttons.
-    """
-    # Regex to find [Title](URL)
+    """Scans text for Markdown links and extracts them to render as Premium Buttons."""
     links = re.findall(r'\[([^\]]+)\]\((https?://[^\)]+)\)', text)
-    
-    # Render Text first (we clean the links from the text if needed, or leave them)
-    # Ideally, we leave the text as is, and append buttons below.
     st.markdown(text)
-    
     if links:
-        st.write("") # Spacer
-        cols = st.columns(len(links) + 2) # Create columns for buttons
+        st.write("") 
+        cols = st.columns(len(links) + 2) 
         for i, (title, url) in enumerate(links):
-            # Render specific button
-            # We clean the title to be short "VIEW SOURCE" if it's too long
             btn_label = "VIEW SOURCE FILE" if len(title) > 20 else title.upper()
-            
-            # Use columns to place buttons side by side if multiple
             with cols[i]:
                 st.markdown(f"<a href='{url}' target='_blank' class='file-link'>{btn_label} &rarr;</a>", unsafe_allow_html=True)
 
@@ -259,6 +242,10 @@ def main():
 
     # --- MAIN DASHBOARD ---
     service = get_drive_service()
+    if not service:
+        st.error("GCP Credentials missing. Check Secrets.")
+        st.stop()
+        
     if "model" not in st.session_state: st.session_state.model = get_working_model()
 
     # SIDEBAR
@@ -267,14 +254,11 @@ def main():
         tips = ["**Did you know?**\nCampaigns limited by budget miss out on 20% of converting traffic on average.", "**Pro Tip:**\nUse 'Target ROAS' with uncapped budgets to capture all profitable demand.", "**Holiday Insight:**\nSearch demand spikes 48h before a sale."]
         st.markdown(f"""<div class="tip-card">{random.choice(tips)}</div>""", unsafe_allow_html=True)
         st.divider()
-        
-        # Admin Diagnostics
         with st.expander("🔧 Admin Diagnostics"):
             if service:
                 debug_files = list_files(service, FOLDER_ID)
                 if debug_files: st.success(f"✅ Connected: {len(debug_files)} files found.")
                 else: st.error("❌ No files found. Check Permissions.")
-        
         if st.button("🔒 Logout"): st.session_state.authenticated = False; st.rerun()
 
     # HERO HEADER
@@ -301,7 +285,6 @@ def main():
     
     for msg in st.session_state.messages: 
         with st.chat_message(msg["role"]):
-            # Use the new renderer for history too
             if msg["role"] == "assistant":
                 extract_and_render_links(msg["content"])
             else:
@@ -335,10 +318,7 @@ def main():
             ans_text = generate_with_backoff(st.session_state.model, final_prompt)
             
             step_box.update(label="Analysis Complete", state="complete", expanded=False)
-            
-            # Use the Smart Renderer to show buttons
             extract_and_render_links(ans_text)
-            
             st.session_state.messages.append({"role": "assistant", "content": ans_text})
 
 if __name__ == "__main__": main()
